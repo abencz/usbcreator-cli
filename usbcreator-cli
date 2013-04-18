@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Based on the usb-creator hack found at: http://askubuntu.com/a/258954
+# Use the usb-creator infrastructure to write ISO files to disk from the
+# command line.
+
+from __future__ import print_function
+from usbcreator.misc import sane_path, setup_logging
+import gettext
+
+from usbcreator.install import install
+
+import optparse
+import tempfile
+import os
+
+parser = optparse.OptionParser(usage='%prog [options] <ISO> <device> [device] ...', version='0.0.1')
+parser.set_defaults(safe=False,
+                    iso=None,
+                    persistent=True,
+                    allow_system_internal=False,
+                    trace=False)
+parser.add_option('-r', '--replace', dest='replace', action='store_true',
+                  help='replace the contents of the destination devices; will erase/overwrite data - be careful!')
+parser.add_option('-s', '--simulate', dest='simulate', action='store_true',
+                  help='do not actually write ISO to disk, just print what we are about to do and exit')
+(options, args) = parser.parse_args()
+
+sane_path()
+setup_logging()
+gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
+
+
+def create_single_usb(iso_dir, device):
+    # format the device if we're replacing contents
+    if options.replace:
+        os.system("mkdosfs %s" % device)
+
+    dev_dir = tempfile.mkdtemp()
+    os.system("mount %s %s" % (device, dev_dir))
+
+    ugh = install(iso_dir, dev_dir, False, device=device)
+    ugh.success = print
+    ugh.failure = print
+    ugh.progress = print
+    ugh.progress_message = print
+    ugh.progress_pulse = print
+    ugh.progress_pulse_stop = print
+    ugh.retry = print
+    ugh.run()
+
+    os.system("umount %s" % dev_dir)
+    os.rmdir(dev_dir)
+    
+
+def create_usb(iso, *devices):
+    iso_dir = tempfile.mkdtemp()
+    os.system("mount %s %s" % (iso, iso_dir))
+
+    for d in devices:
+        create_single_usb(iso_dir, d)
+
+    os.system("umount %s" % iso_dir)
+    os.rmdir(iso_dir)
+
+
+if __name__ == "__main__":
+    iso = args[0]
+    devices = args[1:]
+    
+    if options.simulate:
+        print("Will write ISO %s to devices: %s" % (iso, devices))
+    else:
+        create_usb(iso, devices)
+    
