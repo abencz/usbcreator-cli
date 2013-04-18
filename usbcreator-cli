@@ -38,7 +38,7 @@ def create_single_usb(iso_dir, device):
         os.system("mkdosfs %s" % device)
 
     dev_dir = tempfile.mkdtemp()
-    os.system("mount %s %s" % (device, dev_dir))
+    os.system("mount -t vfat %s %s" % (device, dev_dir))
 
     ugh = install(iso_dir, dev_dir, False, device=device)
     ugh.success = print
@@ -50,11 +50,12 @@ def create_single_usb(iso_dir, device):
     ugh.retry = print
     ugh.run()
 
-    os.system("umount %s" % dev_dir)
+    # no need to umount, usbcreator does this already
+    #os.system("umount %s" % dev_dir)
     os.rmdir(dev_dir)
     
 
-def create_usb(iso, *devices):
+def create_usb(iso, devices):
     iso_dir = tempfile.mkdtemp()
     os.system("mount %s %s" % (iso, iso_dir))
 
