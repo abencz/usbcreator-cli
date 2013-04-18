@@ -14,6 +14,7 @@ from usbcreator.install import install
 import optparse
 import tempfile
 import os
+import sys
 
 parser = optparse.OptionParser(usage='%prog [options] <ISO> <device> [device] ...', version='0.0.1')
 parser.set_defaults(safe=False,
@@ -32,6 +33,12 @@ setup_logging()
 gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
 
 
+def print_status(*args):
+    percent = args[0]
+    sys.stdout.write("\r[%s%%]" % percent)
+    sys.stdout.flush()
+
+
 def create_single_usb(iso_dir, device):
     # format the device if we're replacing contents
     if options.format:
@@ -43,7 +50,7 @@ def create_single_usb(iso_dir, device):
     ugh = install(iso_dir, dev_dir, False, device=device)
     ugh.success = print
     ugh.failure = print
-    ugh.progress = print
+    ugh.progress = print_status
     ugh.progress_message = print
     ugh.progress_pulse = print
     ugh.progress_pulse_stop = print
