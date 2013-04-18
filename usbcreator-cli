@@ -21,8 +21,8 @@ parser.set_defaults(safe=False,
                     persistent=True,
                     allow_system_internal=False,
                     trace=False)
-parser.add_option('-r', '--replace', dest='replace', action='store_true',
-                  help='replace the contents of the destination devices; will erase/overwrite data - be careful!')
+parser.add_option('-f', '--format', dest='format', action='store_true',
+                  help='format the drive as vfat before starting')
 parser.add_option('-s', '--simulate', dest='simulate', action='store_true',
                   help='do not actually write ISO to disk, just print what we are about to do and exit')
 (options, args) = parser.parse_args()
@@ -34,7 +34,7 @@ gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
 
 def create_single_usb(iso_dir, device):
     # format the device if we're replacing contents
-    if options.replace:
+    if options.format:
         os.system("mkdosfs %s" % device)
 
     dev_dir = tempfile.mkdtemp()
