@@ -14,7 +14,10 @@ from usbcreator.install import install
 import optparse
 import tempfile
 import os
+import re
 import sys
+import multiprocessing
+import time
 
 parser = optparse.OptionParser(usage='%prog [options] <ISO> <device> [device] ...', version='0.0.1')
 parser.set_defaults(safe=False,
@@ -32,45 +35,123 @@ sane_path()
 setup_logging()
 gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
 
+DEV_REGEX = re.compile(r"^sd[a-z]1$")
 
-def print_status(*args):
-    percent = args[0]
-    sys.stdout.write("\r[%s%%]" % percent)
-    sys.stdout.flush()
+# The writer worker uses multiprocessing instead of threading because of issues
+# using threading with dbus. usbcreator.install uses dbus internally for
+# installing the bootloader - this step fails if run from multiple threads.
+# See also: 
+#    http://jameswestby.net/weblog/tech/14-caution-python-multiprocessing-and-glib-dont-mix.html
+class WriteWorker(multiprocessing.Process):
+    def __init__(self, iso_dir, device):
+        multiprocessing.Process.__init__(self)
+
+        self.iso_dir = iso_dir
+        self.device = "/dev/" + device
+        self.format = True
+        self.daemon = True
+        self.kill = multiprocessing.Event()
+
+    def run(self):
+        # format the device if we're replacing contents
+        if self.format:
+            os.system("mkdosfs %s" % self.device)
+
+        dev_dir = tempfile.mkdtemp()
+        os.system("mount -t vfat %s %s" % (self.device, dev_dir))
+
+        ugh = install(self.iso_dir, dev_dir, False, device=self.device)
+        ugh.success = print
+        ugh.failure = print
+        ugh.progress = self.noop
+        ugh.progress_message = print
+        ugh.progress_pulse = self.process_event
+        ugh.progress_pulse_stop = print
+        print("Writing ISO to %s" % self.device)
+        ugh.retry = print
+        try:
+            ugh.run()
+        except:
+            os.system("umount %s" % dev_dir)
+        finally:
+            # no need to umount in normal case, usbcreator does this already
+            os.rmdir(dev_dir)
+
+        print("Completed writing to %s" % self.device)
+
+    def process_event(self):
+        if self.kill.is_set():
+            raise Exception
+
+    def noop(self): pass
+
+    def print_status(self, *args):
+        percent = args[0]
+        sys.stdout.write("\r[%s%%]" % percent)
+        sys.stdout.flush()
 
 
-def create_single_usb(iso_dir, device):
-    # format the device if we're replacing contents
-    if options.format:
-        os.system("mkdosfs %s" % device)
+def monitor_dev(iso_dir):
+    def devs():
+        return set([ f for f in os.listdir("/dev") 
+                     if re.match(DEV_REGEX, f) ])
 
-    dev_dir = tempfile.mkdtemp()
-    os.system("mount -t vfat %s %s" % (device, dev_dir))
+    # Devices connected at program startup are assumed
+    # to be the system's base disks. Let's not flash
+    # anything onto those.
+    system_devs = devs()
+    print("System devs: %s" % ' '.join(system_devs))
 
-    ugh = install(iso_dir, dev_dir, False, device=device)
-    ugh.success = print
-    ugh.failure = print
-    ugh.progress = print_status
-    ugh.progress_message = print
-    ugh.progress_pulse = print
-    ugh.progress_pulse_stop = print
-    ugh.retry = print
-    ugh.run()
+    working_devs = set()
 
-    # no need to umount, usbcreator does this already
-    #os.system("umount %s" % dev_dir)
-    os.rmdir(dev_dir)
-    
+    copying = dict()
+
+    while True:
+        current_devs = devs() - system_devs
+        new_devs = current_devs - working_devs
+        gone_devs = working_devs - current_devs
+
+        for dev in new_devs:
+            thread = WriteWorker(iso_dir, dev)
+            thread.start()
+            copying[dev] = thread
+
+            working_devs |= set([dev])
+            print("Flashing /dev/%s\n\r" % dev)
+
+        for dev, copy in copying.items():
+            if not copy.is_alive():
+                # process has finished, remove from list of copying processes.
+                del copying[dev]
+                copy.join()
+                del(copy)
+                print("Finished flashing /dev/%s\n\r" % dev)
+
+        for dev in gone_devs:
+            working_devs -= set([dev])
+            if dev in copying:
+                thread = copying.pop(dev)
+                thread.kill.set()
+                thread.join()
+
+            print("Lost /dev/%s\n\r" % dev)
+        
+        time.sleep(1)
+
 
 def create_usb(iso, devices):
     iso_dir = tempfile.mkdtemp()
     os.system("mount %s %s" % (iso, iso_dir))
 
-    for d in devices:
-        create_single_usb(iso_dir, d)
+    try:
+        monitor_dev(iso_dir)
+    except:
+        os.system("umount %s" % iso_dir)
+        os.rmdir(iso_dir)
+        raise
 
-    os.system("umount %s" % iso_dir)
-    os.rmdir(iso_dir)
+    #for d in devices:
+    #    create_single_usb(iso_dir, d)
 
 
 if __name__ == "__main__":
