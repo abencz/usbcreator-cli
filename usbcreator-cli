@@ -19,23 +19,6 @@ import sys
 import multiprocessing
 import time
 
-parser = optparse.OptionParser(usage='%prog [options] <ISO> <device> [device] ...', version='0.0.1')
-parser.set_defaults(safe=False,
-                    iso=None,
-                    persistent=True,
-                    allow_system_internal=False,
-                    trace=False)
-parser.add_option('-f', '--format', dest='format', action='store_true',
-                  help='format the drive as vfat before starting')
-parser.add_option('-s', '--simulate', dest='simulate', action='store_true',
-                  help='do not actually write ISO to disk, just print what we are about to do and exit')
-(options, args) = parser.parse_args()
-
-sane_path()
-setup_logging()
-gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
-
-DEV_REGEX = re.compile(r"^sd[a-z]1$")
 
 # The writer worker uses multiprocessing instead of threading because of issues
 # using threading with dbus. usbcreator.install uses dbus internally for
@@ -91,75 +74,110 @@ class WriteWorker(multiprocessing.Process):
         sys.stdout.flush()
 
 
-def monitor_dev(iso_dir):
-    def devs():
+class USBWriter(object):
+    def __init__(self):
+        parser = optparse.OptionParser(usage='%prog [options] <ISO> <device> [device] ...',
+                version='0.0.1')
+        parser.set_defaults(safe=False,
+                            iso=None,
+                            persistent=True,
+                            allow_system_internal=False,
+                            trace=False)
+        parser.add_option('-f', '--format', dest='format', action='store_true',
+                          help='format the drive as vfat before starting')
+        parser.add_option('-s', '--simulate', dest='simulate', action='store_true',
+                          help='do not actually write ISO to disk, just print what we are about to do and exit')
+        (self.options, args) = parser.parse_args()
+        self.iso = args[0]
+        self.devices = args[1:]
+
+        sane_path()
+        setup_logging()
+        gettext.install('usbcreator', localedir='/usr/share/locale', unicode=True)
+
+    def run(self):
+        if self.options.simulate:
+            print("Will write ISO %s to devices: %s" % (self.iso, self.devices))
+            return 
+
+        iso_dir = tempfile.mkdtemp()
+        os.system("mount %s %s" % (self.iso, iso_dir))
+
+        try:
+            if len(self.devices) > 0:
+                self.create_usb(iso_dir)
+            else:
+                self.monitor_dev(iso_dir)
+        finally:
+            os.system("umount %s" % iso_dir)
+            os.rmdir(iso_dir)
+
+    def create_usb(self, iso_dir):
+        workers = []
+        devs = self._devs()
+
+        for d in self.devices:
+            device = os.path.basename(d)
+            if device not in devs:
+                print("Device %s is not a valid device" % d)
+                continue
+            worker = WriteWorker(iso_dir, device)
+            workers.append(worker)
+            worker.start()
+
+        for w in workers:
+            w.join()
+
+    def _devs(self):
+        DEV_REGEX = re.compile(r"^sd[a-z]1$")
         return set([ f for f in os.listdir("/dev") 
                      if re.match(DEV_REGEX, f) ])
 
-    # Devices connected at program startup are assumed
-    # to be the system's base disks. Let's not flash
-    # anything onto those.
-    system_devs = devs()
-    print("System devs: %s" % ' '.join(system_devs))
+    def monitor_dev(self, iso_dir):
+        # Devices connected at program startup are assumed
+        # to be the system's base disks. Let's not flash
+        # anything onto those.
+        system_devs = self._devs()
+        print("System devs: %s" % ' '.join(system_devs))
 
-    working_devs = set()
+        working_devs = set()
 
-    copying = dict()
+        copying = dict()
 
-    while True:
-        current_devs = devs() - system_devs
-        new_devs = current_devs - working_devs
-        gone_devs = working_devs - current_devs
+        while True:
+            current_devs = self._devs() - system_devs
+            new_devs = current_devs - working_devs
+            gone_devs = working_devs - current_devs
 
-        for dev in new_devs:
-            thread = WriteWorker(iso_dir, dev)
-            thread.start()
-            copying[dev] = thread
+            for dev in new_devs:
+                thread = WriteWorker(iso_dir, dev)
+                thread.start()
+                copying[dev] = thread
 
-            working_devs |= set([dev])
-            print("Flashing /dev/%s\n\r" % dev)
+                working_devs |= set([dev])
+                print("Flashing /dev/%s\n\r" % dev)
 
-        for dev, copy in copying.items():
-            if not copy.is_alive():
-                # process has finished, remove from list of copying processes.
-                del copying[dev]
-                copy.join()
-                del(copy)
-                print("Finished flashing /dev/%s\n\r" % dev)
+            for dev, copy in copying.items():
+                if not copy.is_alive():
+                    # process has finished, remove from list of copying processes.
+                    del copying[dev]
+                    copy.join()
+                    del(copy)
+                    print("Finished flashing /dev/%s\n\r" % dev)
 
-        for dev in gone_devs:
-            working_devs -= set([dev])
-            if dev in copying:
-                thread = copying.pop(dev)
-                thread.kill.set()
-                thread.join()
+            for dev in gone_devs:
+                working_devs -= set([dev])
+                if dev in copying:
+                    thread = copying.pop(dev)
+                    thread.kill.set()
+                    thread.join()
 
-            print("Lost /dev/%s\n\r" % dev)
-        
-        time.sleep(1)
-
-
-def create_usb(iso, devices):
-    iso_dir = tempfile.mkdtemp()
-    os.system("mount %s %s" % (iso, iso_dir))
-
-    try:
-        monitor_dev(iso_dir)
-    except:
-        os.system("umount %s" % iso_dir)
-        os.rmdir(iso_dir)
-        raise
-
-    #for d in devices:
-    #    create_single_usb(iso_dir, d)
+                print("Lost /dev/%s\n\r" % dev)
+            
+            time.sleep(1)
 
 
 if __name__ == "__main__":
-    iso = args[0]
-    devices = args[1:]
-    
-    if options.simulate:
-        print("Will write ISO %s to devices: %s" % (iso, devices))
-    else:
-        create_usb(iso, devices)
-    
+    writer = USBWriter()
+    writer.run()
+
