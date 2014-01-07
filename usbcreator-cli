@@ -31,8 +31,7 @@ class WriteWorker(multiprocessing.Process):
 
         self.iso_dir = iso_dir
         self.device = "/dev/" + device
-        self.format = True
-        self.daemon = True
+        self.format = False
         self.kill = multiprocessing.Event()
 
     def run(self):
