@@ -26,12 +26,12 @@ import time
 # See also: 
 #    http://jameswestby.net/weblog/tech/14-caution-python-multiprocessing-and-glib-dont-mix.html
 class WriteWorker(multiprocessing.Process):
-    def __init__(self, iso_dir, device):
+    def __init__(self, iso_dir, device, opts):
         multiprocessing.Process.__init__(self)
 
         self.iso_dir = iso_dir
         self.device = "/dev/" + device
-        self.format = False
+        self.format = opts.format
         self.kill = multiprocessing.Event()
 
     def run(self):
@@ -120,7 +120,7 @@ class USBWriter(object):
             if device not in devs:
                 print("Device %s is not a valid device" % d)
                 continue
-            worker = WriteWorker(iso_dir, device)
+            worker = WriteWorker(iso_dir, device, self.options)
             workers.append(worker)
             worker.start()
 
@@ -149,7 +149,7 @@ class USBWriter(object):
             gone_devs = working_devs - current_devs
 
             for dev in new_devs:
-                thread = WriteWorker(iso_dir, dev)
+                thread = WriteWorker(iso_dir, dev, self.options)
                 thread.start()
                 copying[dev] = thread
 
